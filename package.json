@@ -1,0 +1,21 @@
+{
+  "name": "construction-insurance-refund",
+  "private": true,
+  "version": "2.0.0",
+  "type": "module",
+  "description": "건설업 고용·산재보험료 환급/경정청구 산출기 (2단계 AI 추출)",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "lucide-react": "0.460.0",
+    "react": "18.3.1",
+    "react-dom": "18.3.1"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "4.3.4",
+    "vite": "6.0.7"
+  }
+}
