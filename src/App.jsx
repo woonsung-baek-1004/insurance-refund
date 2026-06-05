@@ -132,7 +132,8 @@ function App() {
       const instruction =
         kind === "s1"
           ? `한국 건설회사의 기업정보(코데이타류) 또는 재무요약 PDF입니다.
-연도별로 KRW 정수 추출(모르면 null):
+★ 먼저 표의 금액 단위(천원/백만원/원)를 확인하고, 모든 값을 "원" 단위 정수로 환산하세요(천원이면 ×1000).
+연도별로 원(KRW) 정수 추출(모르면 null):
 - grossAmount: 총공사금액 또는 매출액(공사수익)
 - subcontract: 외주공사비/하도급금액(있으면)
 - laborInCost: 매출원가 내 노무비(직접노무비)
@@ -141,15 +142,28 @@ function App() {
 - reportedPremium: 보험료 납부액
 또한 회사명/사업자번호도.`
           : `세무조정계산서/재무제표/원가명세서/결산자료입니다.
-연도별로 KRW 정수 정밀 추출(모르면 null):
+★ 먼저 표의 금액 단위(천원/백만원/원)를 확인하고, 모든 값을 "원" 단위 정수로 환산하세요(천원이면 ×1000).
+연도별로 원(KRW) 정수 정밀 추출(모르면 null):
 - grossAmount: 총공사금액(공사수익/매출)
 - subcontract: 승인 하수급/외주공사 금액
 - laborInCost: 직접노무비(공사원가명세서)
 - salaries: 급여·임금(판관비)
 - outsourcedFee: 외주공사 중 노무비 추정분
 - reportedPremium: 고용·산재 보험료 납부액`;
-      const sys = `당신은 한국 건설업 고용·산재보험 환급 실무 보조 AI입니다. 아래 JSON만 출력(설명·코드펜스 금지):
-{"company":{"name":string|null,"bizno":string|null},"years":[{"year":number,"grossAmount":number|null,"subcontract":number|null,"laborInCost":number|null,"salaries":number|null,"outsourcedFee":number|null,"reportedPremium":number|null}],"notes":string}`;
+      const sys = `당신은 한국 건설업 고용·산재보험 환급 실무 보조 AI입니다.
+
+[금액 단위 규칙 — 매우 중요]
+- 한국 재무제표는 보통 "(단위: 천원)" 또는 "(단위: 백만원)"으로 표시됩니다. 표 제목·머리글·주석에서 단위를 먼저 찾으세요.
+- 모든 금액은 최종적으로 반드시 "원(KRW)" 단위 정수로 환산해서 출력하세요.
+  · 표가 천원 단위이면 표에 적힌 숫자에 ×1000
+  · 표가 백만원 단위이면 ×1000000
+  · 원 단위이면 그대로
+- 예) "(단위: 천원)" 표에 1,234,567 이라고 적혀 있으면 → 1234567000 으로 출력.
+- 단위를 못 찾으면 금액 규모로 추정하세요. 건설사 연매출이 보통 수십억~수천억(=수십억 단위 숫자)인 점을 기준으로, 환산 후 값이 비현실적으로 크면(예: 수십조) 단위를 잘못 본 것이니 다시 점검.
+- detectedUnit 필드에 판단한 단위("원"/"천원"/"백만원"/"불명")를 적으세요.
+
+아래 JSON만 출력(설명·코드펜스 금지). 모든 금액 필드는 원 단위 정수:
+{"company":{"name":string|null,"bizno":string|null},"detectedUnit":string,"years":[{"year":number,"grossAmount":number|null,"subcontract":number|null,"laborInCost":number|null,"salaries":number|null,"outsourcedFee":number|null,"reportedPremium":number|null}],"notes":string}`;
       const content = [];
       content.push(
         isPdf
@@ -202,7 +216,9 @@ function App() {
           return [...map.values()].sort((a, b) => num(b.year) - num(a.year));
         });
       }
-      setStatusMsg(`추출 완료${parsed.notes ? " · " + parsed.notes : ""}. 값을 검토·보정하세요.`);
+      setStatusMsg(
+        `추출 완료${parsed.detectedUnit ? ` · 인식 단위: ${parsed.detectedUnit}(원으로 환산함)` : ""}${parsed.notes ? " · " + parsed.notes : ""}. 값을 검토·보정하세요.`
+      );
       setShowRaw(true);
     } catch (e) {
       setErrorMsg("자동 추출 실패: " + (e.message || "대용량·복잡 양식일 수 있음") + " — 아래 표에 직접 입력하세요.");
