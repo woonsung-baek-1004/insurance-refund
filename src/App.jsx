@@ -38,7 +38,8 @@ const DEF_RATES = {
   commute: 0.06,
   eiUnemploy: 0.9,
   eiStability: 0.25,
-  haircut: 70,
+  haircut: 70, // 보수적(하한) 계수 %
+  aggressive: 120, // 공격적(상한) 계수 %
   prescription: 3,
 };
 const DEF_PRESETS = [
@@ -95,8 +96,9 @@ function App() {
       const justPremium = num(y.actualWages) * combined;
       const rawRefund = Math.max(0, imposed - justPremium);
       const conservative = rawRefund * (num(rates.haircut) / 100);
+      const aggressive = rawRefund * (num(rates.aggressive) / 100);
       const eligible = num(y.year) >= CY - num(rates.prescription);
-      return { ...y, effSanjae, combined, netGross, ratio, estBase, imposed, justPremium, rawRefund, conservative, eligible };
+      return { ...y, effSanjae, combined, netGross, ratio, estBase, imposed, justPremium, rawRefund, conservative, aggressive, eligible };
     });
   }, [years, rates, presets]);
 
@@ -105,6 +107,7 @@ function App() {
     return {
       precise: w.reduce((s, r) => s + r.rawRefund, 0),
       conservative: w.reduce((s, r) => s + r.conservative, 0),
+      aggressive: w.reduce((s, r) => s + r.aggressive, 0),
     };
   }, [rows]);
 
@@ -349,7 +352,7 @@ function App() {
 
           <h3 className="ph3">요율 <span className="verify">(2025 기준 · 검증 필요)</span></h3>
           <div className="rates">
-            {[["sanjae", "산재 기본 %"], ["commute", "출퇴근재해 %"], ["eiUnemploy", "고용(실업) %"], ["eiStability", "고용안정·직능 %"], ["haircut", "1차 보수계수 %"], ["prescription", "경정시효(년)"]].map(([k, l]) => (
+            {[["sanjae", "산재 기본 %"], ["commute", "출퇴근재해 %"], ["eiUnemploy", "고용(실업) %"], ["eiStability", "고용안정·직능 %"], ["haircut", "보수계수 %"], ["aggressive", "공격계수 %"], ["prescription", "경정시효(년)"]].map(([k, l]) => (
               <label key={k}>{l}<input className="ci" inputMode="decimal" value={rates[k]} onChange={(e) => setRates({ ...rates, [k]: e.target.value.replace(/[^\d.]/g, "") })} /></label>
             ))}
           </div>
@@ -357,22 +360,39 @@ function App() {
 
         <section className="panel result">
           <div className="result-top">
-            <div className="result-label"><Coins size={13} /> {stage === 1 ? "1차 · 보수적 환급 추정(하한)" : "2차 · 정밀 환급 산출"}</div>
-            <div className="result-big">{won(stage === 1 ? totals.conservative : totals.precise)}</div>
-            <div className="result-sub">경정청구 시효 {rates.prescription}년 이내 합계 · 정밀 {won(totals.precise)} / 보수적 {won(totals.conservative)}</div>
+            <div className="result-label"><Coins size={13} /> 환급 추정 · 경정청구 시효 {rates.prescription}년 이내 합계</div>
+            <div className="cards">
+              <div className="card cons">
+                <div className="card-h">보수적 · 하한</div>
+                <div className="card-v">{won(totals.conservative)}</div>
+                <div className="card-n">계수 {rates.haircut}%</div>
+              </div>
+              <div className="card std">
+                <div className="card-h">표준 · 정밀</div>
+                <div className="card-v">{won(totals.precise)}</div>
+                <div className="card-n">부과 − 정당</div>
+              </div>
+              <div className="card aggr">
+                <div className="card-h">공격적 · 상한</div>
+                <div className="card-v">{won(totals.aggressive)}</div>
+                <div className="card-n">계수 {rates.aggressive}%</div>
+              </div>
+            </div>
+            <div className="result-sub">예상 환급 범위: <b>{won(totals.conservative)}</b> ~ <b>{won(totals.aggressive)}</b></div>
           </div>
           <div className="tbl-wrap">
             <table className="tbl res-tbl">
-              <thead><tr><th>연도</th><th>적용요율</th><th>추정보수</th><th>부과(추정)</th><th>정당</th><th>환급(정밀)</th></tr></thead>
+              <thead><tr><th>연도</th><th>적용요율</th><th>부과(추정)</th><th>정당</th><th>보수</th><th>표준</th><th>공격</th></tr></thead>
               <tbody>
                 {rows.map((r) => (
                   <tr key={r.id} className={r.eligible ? "" : "expired"}>
                     <td>{r.year}{!r.eligible && <span className="tag">시효</span>}</td>
                     <td>{(r.combined * 100).toFixed(2)}%</td>
-                    <td>{wonShort(r.estBase)}</td>
                     <td>{wonShort(r.imposed)}</td>
                     <td>{wonShort(r.justPremium)}</td>
+                    <td>{wonShort(r.conservative)}</td>
                     <td className="hi">{wonShort(r.rawRefund)}</td>
+                    <td className="hi2">{wonShort(r.aggressive)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -384,7 +404,8 @@ function App() {
             <p>추정 보수총액 = 순공사금액 × 노무비율(공종별)</p>
             <p>적용 산재율 = 산재 기본 × (1 + 개별실적요율 증감율)</p>
             <p>부과(추정) = 추정보수 × 합산요율 · 신고보험료 입력 시 그 값</p>
-            <p>환급 = 부과 − (실보수 × 합산요율), 1차는 보수계수 {rates.haircut}%</p>
+            <p>표준(정밀) = 부과 − (실보수 × 합산요율)</p>
+            <p>보수적 = 표준 × {rates.haircut}% / 공격적 = 표준 × {rates.aggressive}%</p>
           </div>
           <div className="actions">
             {stage === 1
@@ -420,18 +441,19 @@ function ReportModal({ company, rows, totals, rates, onClose }) {
         <div className="report">
           <p className="r-co"><b>{company.name || "(회사명)"}</b> · 사업자 {company.bizno || "—"}</p>
           <table className="tbl">
-            <thead><tr><th>연도</th><th>공종</th><th>순공사</th><th>실보수</th><th>부과(추정)</th><th>정당</th><th>환급</th><th>경정</th></tr></thead>
+            <thead><tr><th>연도</th><th>공종</th><th>순공사</th><th>실보수</th><th>부과(추정)</th><th>정당</th><th>보수</th><th>표준</th><th>공격</th><th>경정</th></tr></thead>
             <tbody>
               {rows.map((r) => (
                 <tr key={r.id}>
                   <td>{r.year}</td><td>{r.type}</td><td>{wonShort(r.netGross)}</td><td>{wonShort(num(r.actualWages))}</td>
-                  <td>{wonShort(r.imposed)}</td><td>{wonShort(r.justPremium)}</td><td>{wonShort(r.rawRefund)}</td>
+                  <td>{wonShort(r.imposed)}</td><td>{wonShort(r.justPremium)}</td>
+                  <td>{wonShort(r.conservative)}</td><td>{wonShort(r.rawRefund)}</td><td>{wonShort(r.aggressive)}</td>
                   <td>{r.eligible ? "가능" : "시효경과"}</td>
                 </tr>
               ))}
             </tbody>
           </table>
-          <p className="r-sum">경정청구 가능(시효 {rates.prescription}년) — 정밀 <b>{won(totals.precise)}</b> / 보수적 <b>{won(totals.conservative)}</b></p>
+          <p className="r-sum">경정청구 가능(시효 {rates.prescription}년) 환급 범위 — 보수적 <b>{won(totals.conservative)}</b> · 표준 <b>{won(totals.precise)}</b> · 공격적 <b>{won(totals.aggressive)}</b></p>
           <p className="r-note">추정치이며 공단 확정정산·전문가 검토로 확정해야 합니다.</p>
         </div>
       </div>
@@ -498,11 +520,23 @@ html,body,#root{margin:0;min-height:100%}
 .result .ph,.result .ph3,.result h4{color:#efe9db}
 .result-top{border-bottom:1px solid #3a352c;padding-bottom:18px;margin-bottom:16px}
 .result-label{display:flex;align-items:center;gap:6px;font-family:'IBM Plex Mono',monospace;font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:#c2b89f}
-.result-big{font-family:'Fraunces',serif;font-weight:800;font-size:clamp(32px,5.2vw,50px);color:#fff;line-height:1.05;margin:8px 0 6px}
+.cards{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin:12px 0 10px}
+@media(max-width:520px){.cards{grid-template-columns:1fr}}
+.card{border:1px solid #3a352c;border-radius:6px;padding:11px 12px;background:#26221b}
+.card-h{font-size:10.5px;font-family:'IBM Plex Mono',monospace;letter-spacing:.08em;color:#a9a08a;margin-bottom:6px}
+.card-v{font-family:'Fraunces',serif;font-weight:800;font-size:clamp(17px,2.4vw,23px);line-height:1.05;color:#fff;word-break:break-all}
+.card-n{font-size:10px;color:#8a8475;margin-top:5px;font-family:'IBM Plex Mono',monospace}
+.card.std{background:#15302a;border-color:#1d6b5c}
+.card.std .card-v{color:#7fd6b8}
+.card.aggr{border-color:#7a5a2a}
+.card.aggr .card-v{color:#e6b56a}
+.card.cons .card-v{color:#cfc6b2}
 .result-sub{font-size:12.5px;color:#a9a08a}
+.result-sub b{color:#efe9db;font-family:'Fraunces',serif}
 .res-tbl th{color:#a9a08a;border-bottom-color:#3a352c}
 .res-tbl td{border-bottom-color:#2b271f;color:#e3dccb}
 .res-tbl td.hi{color:#7fd6b8;font-weight:600;font-family:'IBM Plex Mono',monospace}
+.res-tbl td.hi2{color:#e6b56a;font-family:'IBM Plex Mono',monospace}
 .res-tbl tr.expired{opacity:.42}
 .tag{font-size:9px;background:#4a2018;color:#e9a48f;padding:2px 5px;border-radius:3px;margin-left:5px;font-family:'IBM Plex Mono',monospace}
 .formula{margin-top:18px;background:#26221b;border-radius:5px;padding:14px 16px}
