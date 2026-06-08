@@ -16,7 +16,9 @@ import {
   ChevronRight,
   ChevronDown,
   Receipt,
+  Download,
 } from "lucide-react";
+import * as XLSX from "xlsx";
 
 /*
   건설업 고용·산재보험료 환급 / 경정청구 산출기 (Netlify 배포판)
@@ -42,6 +44,17 @@ const DEF_RATES = {
   aggressive: 120, // 공격적(상한) 계수 %
   prescription: 3,
 };
+// 노무비율 분석법(노무사 실무) 기본값
+const DEF_LABOR = {
+  revenue: "", // 공사수입금(매출)
+  outsourcing: "", // 외주가공비
+  outsourcingRatio: 30, // 외주가공비 중 보수 인정비율 %
+  wages: "", // 급료와임금
+  reportedBase: "", // 신고 보수총액
+  properRatio: 22.33, // 적정노무비율(고시) %
+  combinedRate: 5.5, // 고용·산재 합산요율 %
+  years: 2, // 환급 대상 연수
+};
 const DEF_PRESETS = [
   { key: "원도급", label: "일반 건설공사(원도급)", ratio: 27, base: "총공사금액" },
   { key: "하도급", label: "하도급 공사", ratio: 30, base: "하도급공사금액" },
@@ -64,6 +77,7 @@ const emptyYear = (y) => ({
 function App() {
   const [stage, setStage] = useState(1);
   const [rates, setRates] = useState(DEF_RATES);
+  const [labor, setLabor] = useState(DEF_LABOR);
   const [presets, setPresets] = useState(DEF_PRESETS);
   const [company, setCompany] = useState({ name: "", bizno: "" });
   const [years, setYears] = useState([emptyYear(CY - 3), emptyYear(CY - 2), emptyYear(CY - 1)]);
@@ -110,6 +124,93 @@ function App() {
       aggressive: w.reduce((s, r) => s + r.aggressive, 0),
     };
   }, [rows]);
+
+  // ── 노무비율 분석법 (노무사 실무 방식) ──
+  const analysis = useMemo(() => {
+    const revenue = num(labor.revenue);
+    const outsourcing = num(labor.outsourcing);
+    const wages = num(labor.wages);
+    const reportedBase = num(labor.reportedBase);
+    const oRatio = num(labor.outsourcingRatio) / 100;
+    const proper = num(labor.properRatio) / 100; // 적정노무비율
+    const rate = num(labor.combinedRate) / 100; // 합산요율
+    const yrs = num(labor.years) || 2;
+
+    const actualBase = outsourcing * oRatio + wages; // 실제보수총액 = 외주×30% + 임금
+    const reported = revenue > 0 ? reportedBase / revenue : 0; // 신고노무비율
+    const actual = revenue > 0 ? actualBase / revenue : 0; // 실제노무비율
+
+    // 신고비율이 기준보다 높을수록 과다신고 → 환급
+    const gapProper = reported - proper; // 신고-적정 차이
+    const gapActual = reported - actual; // 신고-실제 차이
+    const incProper = proper > 0 ? gapProper / proper : 0; // 적정대비 증가율(보수적 근거)
+    const incActual = actual > 0 ? gapActual / actual : 0; // 실제대비 증가율(공격적 근거)
+
+    const onePremium = Math.floor(reportedBase * rate / 10) * 10; // 1년치 보험료
+    const totalPremium = onePremium * yrs; // n년치 보험료
+
+    const refundLow = Math.max(0, Math.floor(totalPremium * incProper / 10) * 10); // 최저(보수적)
+    const refundHigh = Math.max(0, Math.floor(totalPremium * incActual / 10) * 10); // 최고(공격적)
+    const refundMid = (refundLow + refundHigh) / 2;
+
+    return {
+      revenue, actualBase, reportedBase, reported, actual, proper,
+      gapProper, gapActual, incProper, incActual,
+      onePremium, totalPremium, refundLow, refundMid, refundHigh, yrs,
+      eligible: reported > proper, // 환급 가능 여부
+    };
+  }, [labor]);
+
+  const setL = (f, v) => setLabor((l) => ({ ...l, [f]: v }));
+
+  // ── 노무비율 분석 결과 엑셀 다운로드 ──
+  function exportAnalysisXlsx() {
+    const a = analysis;
+    const pct = (n) => (n * 100).toFixed(2) + "%";
+    const rows1 = [
+      ["건설업 고용·산재보험료 환급 — 노무비율 분석"], [],
+      ["회사명", company.name || "", "사업자번호", company.bizno || ""],
+      [],
+      ["[ 입력값 ]"],
+      ["공사수입금(매출)", num(labor.revenue)],
+      ["신고 보수총액", num(labor.reportedBase)],
+      ["외주가공비", num(labor.outsourcing)],
+      ["급료와임금", num(labor.wages)],
+      ["외주 보수인정비율", labor.outsourcingRatio + "%"],
+      ["적정노무비율(고시)", labor.properRatio + "%"],
+      ["합산요율", labor.combinedRate + "%"],
+      ["환급 대상 연수", labor.years + "년"],
+      [],
+      ["[ 노무비율 3종 ]"],
+      ["실제보수총액 (외주×비율 + 임금)", a.actualBase],
+      ["신고노무비율", pct(a.reported)],
+      ["적정노무비율", pct(a.proper)],
+      ["실제노무비율", pct(a.actual)],
+      [],
+      ["[ 환급 산출 ]"],
+      ["1년치 보험료", a.onePremium],
+      [`${a.yrs}년치 보험료`, a.totalPremium],
+      ["적정 대비 신고 증가율", pct(a.incProper)],
+      ["실제 대비 신고 증가율", pct(a.incActual)],
+      ["환급 예상 — 최저(보수적)", a.refundLow],
+      ["환급 예상 — 중간", a.refundMid],
+      ["환급 예상 — 최고(공격적)", a.refundHigh],
+      [],
+      ["[ 검토의견 ]"],
+      [a.eligible
+        ? `신고노무비율 ${pct(a.reported)}이 적정(${pct(a.proper)})·실제(${pct(a.actual)})보다 높아 환급을 기대할 수 있습니다. ${a.yrs}년치 기준 최저 ${won(a.refundLow)} ~ 최고 ${won(a.refundHigh)} 환급이 예상됩니다.`
+        : "현재 입력 기준으로는 환급 대상으로 보기 어렵습니다."],
+      ["추가 검토: 1) 판매상품 설치공사 적용 특례  2) 산재법 시행규칙 제4조 생산제품 설치공사 특례(외주보수 산정)"],
+      [],
+      ["※ 본 자료는 추정치이며, 실제 환급은 근로복지공단 확정정산 및 전문가 검토로 확정됩니다."],
+    ];
+    const ws = XLSX.utils.aoa_to_sheet(rows1);
+    ws["!cols"] = [{ wch: 34 }, { wch: 22 }, { wch: 14 }, { wch: 18 }];
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "노무비율분석");
+    const name = (company.name || "노무비율분석").replace(/[\\/:*?"<>|]/g, "");
+    XLSX.writeFile(wb, `${name}_환급분석.xlsx`);
+  }
 
   const setY = (id, f, v) => setYears((ys) => ys.map((y) => (y.id === id ? { ...y, [f]: v } : y)));
   const addY = () => setYears((ys) => [...ys, emptyYear((num(ys[ys.length - 1]?.year) || CY) - 1)]);
@@ -258,8 +359,14 @@ function App() {
           <span className="ic"><Calculator size={20} strokeWidth={1.8} /></span>
           <span><b>2차 · 정밀 산출</b><em>세무조정·결산</em></span>
         </button>
+        <ArrowRight className="stage-arrow" size={20} />
+        <button className={"stage-tab" + (stage === 3 ? " on" : "")} onClick={() => setStage(3)}>
+          <span className="ic"><ShieldAlert size={20} strokeWidth={1.8} /></span>
+          <span><b>노무비율 분석</b><em>3종 비율 비교법</em></span>
+        </button>
       </div>
 
+      {stage !== 3 && (
       <div className="grid">
         <section className="panel">
           {stage === 1 ? (
@@ -414,6 +521,102 @@ function App() {
           </div>
         </section>
       </div>
+      )}
+
+      {stage === 3 && (
+      <div className="grid">
+        <section className="panel">
+          <h2 className="ph"><ShieldAlert size={18} /> 노무비율 3종 비교 분석</h2>
+          <p className="phelp">노무사 실무 방식입니다. <b>신고노무비율</b>이 <b>적정노무비율(고시)</b>·<b>실제노무비율</b>보다 높으면 과다신고로 보아 환급 대상이 됩니다. 보수적(적정 기준)~공격적(실제 기준) 범위로 산출합니다.</p>
+
+          <h3 className="ph3">입력 (원 단위)</h3>
+          <div className="rates">
+            <label>공사수입금(매출)<input className="ci" inputMode="numeric" value={labor.revenue} placeholder="0" onChange={(e) => setL("revenue", e.target.value.replace(/[^\d.]/g, ""))} /></label>
+            <label>신고 보수총액<input className="ci" inputMode="numeric" value={labor.reportedBase} placeholder="0" onChange={(e) => setL("reportedBase", e.target.value.replace(/[^\d.]/g, ""))} /></label>
+            <label>외주가공비<input className="ci" inputMode="numeric" value={labor.outsourcing} placeholder="0" onChange={(e) => setL("outsourcing", e.target.value.replace(/[^\d.]/g, ""))} /></label>
+            <label>급료와임금<input className="ci" inputMode="numeric" value={labor.wages} placeholder="0" onChange={(e) => setL("wages", e.target.value.replace(/[^\d.]/g, ""))} /></label>
+            <label>외주 보수인정 %<input className="ci" inputMode="decimal" value={labor.outsourcingRatio} onChange={(e) => setL("outsourcingRatio", e.target.value.replace(/[^\d.]/g, ""))} /></label>
+            <label>적정노무비율 %<input className="ci" inputMode="decimal" value={labor.properRatio} onChange={(e) => setL("properRatio", e.target.value.replace(/[^\d.]/g, ""))} /></label>
+            <label>합산요율 %<input className="ci" inputMode="decimal" value={labor.combinedRate} onChange={(e) => setL("combinedRate", e.target.value.replace(/[^\d.]/g, ""))} /></label>
+            <label>환급 연수<input className="ci" inputMode="numeric" value={labor.years} onChange={(e) => setL("years", e.target.value.replace(/[^\d.]/g, ""))} /></label>
+          </div>
+
+          <h3 className="ph3">3종 노무비율</h3>
+          <div className="ratio3">
+            <div className="r3"><span>신고노무비율</span><b>{(analysis.reported * 100).toFixed(2)}%</b><em>신고보수 ÷ 매출</em></div>
+            <div className="r3"><span>적정노무비율</span><b>{(analysis.proper * 100).toFixed(2)}%</b><em>고시 기준</em></div>
+            <div className="r3"><span>실제노무비율</span><b>{(analysis.actual * 100).toFixed(2)}%</b><em>실보수 ÷ 매출</em></div>
+          </div>
+          <div className="combined">
+            실제보수총액 = 외주가공비 × {labor.outsourcingRatio}% + 급료와임금 = <b>{wonShort(analysis.actualBase)}</b>
+          </div>
+
+          <div className="formula" style={{ background: "#efe9db", marginTop: 16 }}>
+            <h4 style={{ color: "#8a8475" }}>계산 근거 (노무사 실무)</h4>
+            <p style={{ color: "#5c574d" }}>신고노무비율 = 신고 보수총액 ÷ 공사수입금</p>
+            <p style={{ color: "#5c574d" }}>실제노무비율 = (외주가공비×{labor.outsourcingRatio}% + 급료임금) ÷ 공사수입금</p>
+            <p style={{ color: "#5c574d" }}>{labor.years}년치 보험료 = 신고보수 × 합산요율 × {labor.years}</p>
+            <p style={{ color: "#5c574d" }}>보수적 = 보험료 × (신고−적정)/적정</p>
+            <p style={{ color: "#5c574d" }}>공격적 = 보험료 × (신고−실제)/실제</p>
+          </div>
+        </section>
+
+        <section className="panel result">
+          <div className="result-top">
+            <div className="result-label"><Coins size={13} /> 노무비율 분석 · {labor.years}년치 환급 예상</div>
+            {analysis.eligible ? (
+              <>
+                <div className="cards">
+                  <div className="card cons">
+                    <div className="card-h">최저 · 보수적</div>
+                    <div className="card-v">{won(analysis.refundLow)}</div>
+                    <div className="card-n">적정비율 기준</div>
+                  </div>
+                  <div className="card std">
+                    <div className="card-h">중간</div>
+                    <div className="card-v">{won(analysis.refundMid)}</div>
+                    <div className="card-n">평균</div>
+                  </div>
+                  <div className="card aggr">
+                    <div className="card-h">최고 · 공격적</div>
+                    <div className="card-v">{won(analysis.refundHigh)}</div>
+                    <div className="card-n">실제비율 기준</div>
+                  </div>
+                </div>
+                <div className="result-sub">예상 환급 범위: <b>{won(analysis.refundLow)}</b> ~ <b>{won(analysis.refundHigh)}</b></div>
+              </>
+            ) : (
+              <div className="result-sub" style={{ marginTop: 12 }}>
+                신고노무비율이 적정노무비율보다 높지 않아, 현재 입력 기준으로는 환급 대상으로 보기 어렵습니다. 값을 확인하거나 외주보수 산정방법(설치공사 특례 등)을 검토하세요.
+              </div>
+            )}
+          </div>
+
+          <div className="tbl-wrap">
+            <table className="tbl res-tbl">
+              <tbody>
+                <tr><td style={{ textAlign: "left" }}>1년치 보험료</td><td>{wonShort(analysis.onePremium)}</td></tr>
+                <tr><td style={{ textAlign: "left" }}>{analysis.yrs}년치 보험료</td><td>{wonShort(analysis.totalPremium)}</td></tr>
+                <tr><td style={{ textAlign: "left" }}>신고−적정 증가율</td><td>{(analysis.incProper * 100).toFixed(1)}%</td></tr>
+                <tr><td style={{ textAlign: "left" }}>신고−실제 증가율</td><td>{(analysis.incActual * 100).toFixed(1)}%</td></tr>
+                <tr><td style={{ textAlign: "left" }} className="hi">환급 최저(보수적)</td><td className="hi">{wonShort(analysis.refundLow)}</td></tr>
+                <tr><td style={{ textAlign: "left" }} className="hi2">환급 최고(공격적)</td><td className="hi2">{wonShort(analysis.refundHigh)}</td></tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div className="formula">
+            <h4>추가 환급 포인트 (대형 건설사 누락 빈번)</h4>
+            <p>1) 판매상품 설치공사 적용 특례</p>
+            <p>2) 산재법 시행규칙 제4조 생산제품 설치공사 특례 — 외주보수 산정방법</p>
+            <p style={{ color: "#a9a08a", marginTop: 6 }}>위 특례를 반영하면 추가 환급 여지가 있습니다.</p>
+          </div>
+          <div className="actions">
+            <button className="next" onClick={exportAnalysisXlsx}><Download size={16} /> 엑셀로 내려받기</button>
+          </div>
+        </section>
+      </div>
+      )}
 
       <footer className="ft">
         <span className="ft-ic"><ShieldAlert size={16} /></span>
@@ -516,6 +719,14 @@ html,body,#root{margin:0;min-height:100%}
 .add:hover{border-color:var(--teal);color:var(--teal)}
 .rates{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
 @media(max-width:520px){.rates{grid-template-columns:repeat(2,1fr)}.company{grid-template-columns:1fr}}
+.combined{margin-top:12px;font-size:13px;color:#6a6457;background:var(--paper);padding:9px 12px;border-radius:4px}
+.combined b{font-family:'Fraunces',serif;color:var(--teal2)}
+.ratio3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px}
+@media(max-width:520px){.ratio3{grid-template-columns:1fr}}
+.r3{border:1px solid var(--line);border-radius:6px;padding:11px 12px;background:#fff;text-align:center}
+.r3 span{display:block;font-size:11px;color:#8a8475;font-family:'IBM Plex Mono',monospace}
+.r3 b{display:block;font-family:'Fraunces',serif;font-size:22px;color:var(--teal2);margin:4px 0 2px}
+.r3 em{font-style:normal;font-size:10px;color:#b3aa93}
 .result{background:var(--ink);color:#efe9db;border-color:var(--ink)}
 .result .ph,.result .ph3,.result h4{color:#efe9db}
 .result-top{border-bottom:1px solid #3a352c;padding-bottom:18px;margin-bottom:16px}
